@@ -84,7 +84,23 @@ REST_FRAMEWORK["DEFAULT_PERMISSION_CLASSES"] = (
 
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
-ACCOUNT_EMAIL_VERIFICATION = "mandatory"
+# Email verification level: mandatory | optional | none (overridable for self-host)
+ACCOUNT_EMAIL_VERIFICATION = config("ACCOUNT_EMAIL_VERIFICATION", default="mandatory")
+
+# Email delivery. If EMAIL_HOST is set, use real SMTP; otherwise fall back to the
+# console backend so verification emails are printed to the container logs.
+EMAIL_HOST = config("EMAIL_HOST", default="")
+if EMAIL_HOST:
+    EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+    EMAIL_PORT = config("EMAIL_PORT", default=587, cast=int)
+    EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="")
+    EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
+    EMAIL_USE_TLS = config("EMAIL_USE_TLS", default=True, cast=bool)
+    EMAIL_USE_SSL = config("EMAIL_USE_SSL", default=False, cast=bool)
+else:
+    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+
+DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="noreply@" + (DOMAIN or "localhost"))
 
 AUTO_SAVE_INTERVAL = 60  # seconds
 GHOST_CLEAN_INTERVAL = 600

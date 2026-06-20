@@ -1,0 +1,133 @@
+# Dokploy deployment for PyTogether (full stack, single domain via Traefik).
+# Compose path in Dokploy: self-hosting/docker-compose.dokploy.yaml
+# All secrets/config come from Dokploy's Environment panel (NOT a committed .env).
+
+x-backend-env: &backend-env
+  DJANGO_SETTINGS_MODULE: backend.settings
+  DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
+  POSTGRES_USER: ${POSTGRES_USER}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  POSTGRES_DB: ${POSTGRES_DB}
+  POSTGRES_HOST: ${POSTGRES_HOST}
+  POSTGRES_PORT: ${POSTGRES_PORT}
+  DATABASE_URL: ${DATABASE_URL}
+  REDIS_HOST: ${REDIS_HOST}
+  REDIS_PORT: ${REDIS_PORT}
+  PROD: ${PROD}
+  DOMAIN: ${DOMAIN}
+  USE_HTTPS: ${USE_HTTPS}
+
+services:
+  db:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    networks:
+      - backend
+
+  django-builder:
+    image: pytogether-backend:latest
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    command: "true"
+
+  django-init:
+    image: pytogether-backend:latest
+    command: >
+      sh -c "
+        echo 'Django-Init: Waiting for Postgres...'
+        until pg_isready -h $$POSTGRES_HOST -p $$POSTGRES_PORT; do sleep 1; done
+        echo 'Django-Init: Running migrations...'
+        python manage.py migrate
+        echo 'Django-Init: Complete.'
+      "
+    environment: *backend-env
+    depends_on:
+      - db
+      - django-builder
+    networks:
+      - backend
+
+  django:
+    image: pytogether-backend:latest
+    restart: unless-stopped
+    command: daphne -b 0.0.0.0 -p 8000 backend.asgi:application
+    environment: *backend-env
+    depends_on:
+      redis:
+        condition: service_started
+      db:
+        condition: service_started
+      django-init:
+        condition: service_completed_successfully
+    networks:
+      - backend
+
+  celery:
+    image: pytogether-backend:latest
+    restart: unless-stopped
+    command: celery -A backend worker --concurrency=1 -l info
+    environment: *backend-env
+    depends_on:
+      redis:
+        condition: service_started
+      db:
+        condition: service_started
+      django-init:
+        condition: service_completed_successfully
+    networks:
+      - backend
+
+  celery-beat:
+    image: pytogether-backend:latest
+    restart: unless-stopped
+    command: celery -A backend beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    environment: *backend-env
+    depends_on:
+      redis:
+        condition: service_started
+      db:
+        condition: service_started
+      django-init:
+        condition: service_completed_successfully
+    networks:
+      - backend
+
+  nginx:
+    build:
+      context: ..
+      dockerfile: self-hosting/Dockerfile.frontend
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL}
+        VITE_DOMAIN: ${VITE_DOMAIN}
+    restart: always
+    depends_on:
+      - django
+    networks:
+      - backend
+      - dokploy-network   # so Traefik can reach it; route via Dokploy "Domains" tab -> service nginx, port 80
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  backend:
+    driver: bridge
+  dokploy-network:
+    external: true

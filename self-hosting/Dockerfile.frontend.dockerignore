@@ -1,0 +1,11 @@
+# Build-specific ignore for the frontend image (overrides root .dockerignore,
+# which excludes frontend/ for backend-only builds). Keep frontend source in.
+.git
+.gitignore
+**/node_modules
+**/dist
+**/dev-dist
+*.log
+*.out
+*.err
+.DS_Store
